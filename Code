@@ -1,0 +1,109 @@
+import os
+import pandas as pd
+import yfinance as yf
+import numpy as np
+import warnings
+warnings.filterwarnings("ignore")
+
+def get_sp500_tickers():
+    url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
+    table = pd.read_html(url)[0]
+    return table["Symbol"]
+
+def get_financials(ticker):
+    stock = yf.Ticker(ticker)
+    return stock.income_stmt[::-1], stock.balance_sheet[::-1], stock.cashflow[::-1]
+
+def get_financial_ratios(ticker, income_stmt, balance_sheet, cashflows_stmt):
+    try:
+        net_income = income_stmt.loc["Net Income", :].dropna()
+        revenue = income_stmt.loc["Total Revenue", :].dropna()
+        gross_profit = income_stmt.loc["Gross Profit", :].dropna()
+        equity = balance_sheet.loc["Stockholders Equity", :].dropna()
+        cash = balance_sheet.loc["Cash And Cash Equivalents", :].dropna()
+        fcf = cashflows_stmt.loc["Free Cash Flow", :].dropna()
+
+        stock = yf.Ticker(ticker)
+        latest_price = stock.history(period="1d")["Close"].iloc[-1]
+        eps = income_stmt.loc["Diluted EPS", :].dropna()
+
+        ratios = pd.Series(dtype="float64")
+        
+        ratios["Earnings 3Y Growth"] = (net_income.iloc[0] / net_income.iloc[-1]) - 1 if len(net_income) >= 3 else None
+        ratios["Earnings 1Y Growth"] = (net_income.iloc[0] / net_income.iloc[1]) - 1 if len(net_income) >= 2 else None
+        ratios["Operating Revenue 3Y Growth"] = (revenue.iloc[0] / revenue.iloc[-1]) - 1 if len(revenue) >= 3 else None
+        ratios["Operating Revenue 1Y Growth"] = (revenue.iloc[0] / revenue.iloc[1]) - 1 if len(revenue) >= 2 else None
+        ratios["Free Cash Flow 3Y Growth"] = (fcf.iloc[0] / fcf.iloc[-1]) - 1 if len(net_income) >= 3 else None
+        ratios["Free Cash Flow 1Y Growth"] = (fcf.iloc[0] / fcf.iloc[1]) - 1 if len(net_income) >= 2 else None
+        ratios["Gross Profit 3Y Growth"] = (gross_profit.iloc[0] / gross_profit.iloc[-1]) - 1 if len(gross_profit) >= 3 else None
+        ratios["ROE"] = net_income.iloc[0] / equity.iloc[0] if len(equity) > 0 else None
+        ratios["ROE 3Y Growth"] = ((net_income.iloc[0] / equity.iloc[0]) / (net_income.iloc[-1] / equity.iloc[-1])) - 1 if len(equity) >= 3 else None
+        ratios["P/E Ratio"] = latest_price / eps.iloc[0] if len(eps) > 0 else None
+        ratios["P/B Ratio"] = stock.info.get("priceToBook", None)
+        ratios["Current Dividend Yield"] = stock.info.get("dividendYield", None)
+        ratios["Debt to Equity"] = stock.info.get("debtToEquity", None) / 100
+        ratios["Cash per Stock"] = cash.iloc[0] / stock.info["sharesOutstanding"] if len(cash) > 0 and "sharesOutstanding" in stock.info else None
+        ratios["52-Week Low"] = stock.info.get("fiftyTwoWeekLow", None)
+        ratios["52-Week High"] = stock.info.get("fiftyTwoWeekHigh", None)
+        ratios["200-Day Average"] = stock.info.get("twoHundredDayAverage", None)
+        ratios["Current Price"] = latest_price
+        
+    except Exception as e:
+        # print(f"Error processing {ticker}: {e}")
+        return None
+
+    return ratios
+
+def process_sp500():
+    if os.path.exists("a.xlsx"):
+        print("Loading existing data from output.xlsx...")
+        ratios_df = pd.read_excel("output.xlsx", index_col=0)
+        # tickers_df = get_sp500_tickers()
+    else:
+        tickers_df = get_sp500_tickers()
+        data = {}
+
+        for ticker in tickers_df:
+            print(ticker)
+            income_stmt, balance_sheet, cashflow_stmt = get_financials(ticker)
+            ratios = get_financial_ratios(ticker, income_stmt, balance_sheet, cashflow_stmt)
+            if ratios is not None:
+                ratios["Sector"] = yf.Ticker(ticker).info.get("sector")  # Add sector info
+                data[ticker] = ratios
+
+        ratios_df = pd.DataFrame(data).T
+        ratios_df.to_excel("output.xlsx")
+
+    selected_stocks = {}
+    selected_stocks_list = []
+
+    for sector in ratios_df["Sector"].unique():
+        sector_df = ratios_df[ratios_df["Sector"] == sector]
+        numeric_sector_df = sector_df.drop(columns=["Sector"])  # Exclude non-numeric columns
+        averages = numeric_sector_df.median()
+    
+        filtered = sector_df[
+            (sector_df["Earnings 3Y Growth"] > 0) &
+            (sector_df["Earnings 1Y Growth"] > 0) &
+            (sector_df["Operating Revenue 1Y Growth"] > 0) &
+            (sector_df["Operating Revenue 3Y Growth"] > 0) &
+            (sector_df["Gross Profit 3Y Growth"] > 0)
+        ]
+    
+        # Add sector as a column for easy identification
+        filtered["Sector"] = sector
+        selected_stocks_list.append(filtered)
+    
+    # Combine all selected stocks into a single DataFrame
+    selected_stocks_df = pd.concat(selected_stocks_list)
+    
+    # Set a multi-index for better visualization
+    selected_stocks_df.set_index(["Sector", selected_stocks_df.index], inplace=True)
+
+    print("Sector-based filtering complete.")
+    return selected_stocks_df
+
+# Example usage
+selected_stocks = process_sp500()
+selected_stocks.to_excel("Filtered Stocks.xlsx")
+print("Successfully exported Excel")
