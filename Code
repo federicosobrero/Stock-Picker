@@ -55,7 +55,7 @@ def get_financial_ratios(ticker, income_stmt, balance_sheet, cashflows_stmt):
     return ratios
 
 def process_sp500():
-    if os.path.exists("a.xlsx"):
+    if os.path.exists("output.xlsx"):
         print("Loading existing data from output.xlsx...")
         ratios_df = pd.read_excel("output.xlsx", index_col=0)
         # tickers_df = get_sp500_tickers()
